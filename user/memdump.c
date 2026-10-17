@@ -5,7 +5,6 @@
 
 
 void memdump(char *fmt, char *data, int len){
-  int size;
   char c;
   for (char *f = fmt; *f != '\0'; f++) {
     c = *f;
@@ -18,7 +17,7 @@ void memdump(char *fmt, char *data, int len){
         }
         int val;
         memmove(&val, data, 4);
-        printf("%d", val);
+        printf("%d\n", val);
         data += 4;
         len -= 4;
         break;
@@ -31,7 +30,7 @@ void memdump(char *fmt, char *data, int len){
         }
         uint64 val;
         memmove(&val, data, 8);
-        printf("%p", (void *)val);
+        printf("%lx\n", val);
         data += 8;
         len -= 8;
         break;
@@ -44,7 +43,7 @@ void memdump(char *fmt, char *data, int len){
         }
         short val;
         memmove(&val, data, 2);
-        printf("%d", val);
+        printf("%d\n", val);
         data += 2;
         len -= 2;
         break;
@@ -55,7 +54,7 @@ void memdump(char *fmt, char *data, int len){
           printf("memdump: not enough data for '%c'\n", c);
           return;
         }
-        printf("%c", *data);
+        printf("%c\n", *data);
         data += 1;
         len -= 1;
         break;
@@ -68,7 +67,7 @@ void memdump(char *fmt, char *data, int len){
         }
         char *str_ptr;
         memmove(&str_ptr, data, 8);
-        printf("%s", str_ptr);
+        printf("%s\n", str_ptr);
         data += 8;
         len -= 8;
         break;
@@ -81,14 +80,14 @@ void memdump(char *fmt, char *data, int len){
           }
           printf("%c", data[i]);
         }
+        printf("\n");
         data += len;
         len = 0;
         break;
       }
     }
   }
-
-};
+}
 
 int
 main(int argc, char *argv[])
