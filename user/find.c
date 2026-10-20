@@ -2,7 +2,6 @@
 #include "kernel/stat.h"
 #include "user/user.h"
 #include "kernel/fs.h"
-#include "kernel/param.h"
 
 // Lấy tên file/thư mục từ đường dẫn (ví dụ: "./a/b" -> "b")
 char*
@@ -15,47 +14,9 @@ fmtname(char *path)
   return p;
 }
 
-// Xử lý khi tìm thấy file/thư mục khớp tên
-void
-match(char *path, int has_exec, char **exec_argv, int exec_argc)
-{
-  if (!has_exec) {
-    printf("%s\n", path);
-    return;
-  }
-
-  // Nếu có -exec: chạy cmd [args...] path
-  if (exec_argc + 2 > MAXARG) {
-    fprintf(2, "find: too many arguments for -exec\n");
-    exit(1);
-  }
-
-  char *cmd_argv[MAXARG];
-  int i;
-  for (i = 0; i < exec_argc; i++) {
-    cmd_argv[i] = exec_argv[i];
-  }
-  cmd_argv[i++] = path;
-  cmd_argv[i] = 0;
-
-  int pid = fork();
-  if (pid < 0) {
-    fprintf(2, "find: fork failed\n");
-    exit(1);
-  }
-  if (pid == 0) {
-    exec(cmd_argv[0], cmd_argv);
-    // Nếu exec thành công thì sẽ không bao giờ chạy tới đây
-    fprintf(2, "find: exec %s failed\n", cmd_argv[0]);
-    exit(1);
-  }
-  // Tiến trình cha chờ tiến trình con thực thi xong
-  wait(0);
-}
-
 // Duyệt thư mục đệ quy
 void
-find(char *path, char *target, int has_exec, char **exec_argv, int exec_argc)
+find(char *path, char *target)
 {
   char buf[512], *p;
   int fd;
@@ -73,9 +34,9 @@ find(char *path, char *target, int has_exec, char **exec_argv, int exec_argc)
     return;
   }
 
-  // So sánh tên file/thư mục hiện tại với target
+  // So sánh tên file/thư mục hiện tại với target, khớp thì in đường dẫn
   if (strcmp(fmtname(path), target) == 0) {
-    match(path, has_exec, exec_argv, exec_argc);
+    printf("%s\n", path);
   }
 
   switch (st.type) {
@@ -111,7 +72,7 @@ find(char *path, char *target, int has_exec, char **exec_argv, int exec_argc)
 
       // Ghép đường dẫn con và đệ quy
       memmove(p, name, strlen(name) + 1);
-      find(buf, target, has_exec, exec_argv, exec_argc);
+      find(buf, target);
     }
     break;
   }
@@ -122,25 +83,11 @@ find(char *path, char *target, int has_exec, char **exec_argv, int exec_argc)
 int
 main(int argc, char *argv[])
 {
-  if (argc < 3) {
-    fprintf(2, "Usage: find <path> <target> [-exec cmd [args...]]\n");
+  if (argc != 3) {
+    fprintf(2, "Usage: find <path> <target>\n");
     exit(1);
   }
 
-  int has_exec = 0;
-  char **exec_argv = 0;
-  int exec_argc = 0;
-
-  if (argc > 3) {
-    if (strcmp(argv[3], "-exec") != 0 || argc < 5) {
-      fprintf(2, "Usage: find <path> <target> [-exec cmd [args...]]\n");
-      exit(1);
-    }
-    has_exec = 1;
-    exec_argv = &argv[4];
-    exec_argc = argc - 4;
-  }
-
-  find(argv[1], argv[2], has_exec, exec_argv, exec_argc);
+  find(argv[1], argv[2]);
   exit(0);
 }
