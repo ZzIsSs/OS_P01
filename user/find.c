@@ -2,8 +2,8 @@
 #include "kernel/stat.h"
 #include "user/user.h"
 #include "kernel/fs.h"
+#include "kernel/param.h"
 
-// Lấy tên file/thư mục từ đường dẫn (ví dụ: "./a/b" -> "b")
 char*
 fmtname(char *path)
 {
@@ -14,9 +14,42 @@ fmtname(char *path)
   return p;
 }
 
-// Duyệt thư mục đệ quy
+// Thực thi câu lệnh cho tham số -exec
 void
-find(char *path, char *target)
+run_exec(char **cmd_args, int cmd_count, char *path)
+{
+  char *exec_argv[MAXARG];
+
+  if (cmd_count + 1 >= MAXARG) {
+    fprintf(2, "find: exec arguments too long\n");
+    return;
+  }
+
+  // Copy các tham số lệnh
+  for (int i = 0; i < cmd_count; i++) {
+    exec_argv[i] = cmd_args[i];
+  }
+  // Đưa đường dẫn file tìm được vào làm tham số cuối
+  exec_argv[cmd_count] = path;
+  exec_argv[cmd_count + 1] = 0;
+
+  int pid = fork();
+  if (pid < 0) {
+    fprintf(2, "find: fork failed\n");
+    return;
+  }
+
+  if (pid == 0) {
+    exec(exec_argv[0], exec_argv);
+    fprintf(2, "find: exec %s failed\n", exec_argv[0]);
+    exit(1);
+  } else {
+    wait(0);
+  }
+}
+
+void
+find(char *path, char *target, char **cmd_args, int cmd_count)
 {
   char buf[512], *p;
   int fd;
@@ -34,9 +67,13 @@ find(char *path, char *target)
     return;
   }
 
-  // So sánh tên file/thư mục hiện tại với target, khớp thì in đường dẫn
   if (strcmp(fmtname(path), target) == 0) {
-    printf("%s\n", path);
+    if (cmd_count > 0) {
+      // Nếu có tùy chọn -exec thì thực thi lệnh thay vì in tên
+      run_exec(cmd_args, cmd_count, path);
+    } else {
+      printf("%s\n", path);
+    }
   }
 
   switch (st.type) {
@@ -58,7 +95,6 @@ find(char *path, char *target)
       if (de.inum == 0)
         continue;
 
-      // Đọc tên entry và đảm bảo kết thúc bằng '\0'
       char name[DIRSIZ + 1];
       int i;
       for (i = 0; i < DIRSIZ && de.name[i] != 0; i++) {
@@ -66,13 +102,11 @@ find(char *path, char *target)
       }
       name[i] = 0;
 
-      // Bỏ qua "." và ".." để tránh lặp vô tận
       if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
         continue;
 
-      // Ghép đường dẫn con và đệ quy
       memmove(p, name, strlen(name) + 1);
-      find(buf, target);
+      find(buf, target, cmd_args, cmd_count);
     }
     break;
   }
@@ -83,11 +117,30 @@ find(char *path, char *target)
 int
 main(int argc, char *argv[])
 {
-  if (argc != 3) {
-    fprintf(2, "Usage: find <path> <target>\n");
+  if (argc < 3) {
+    fprintf(2, "Usage: find <path> <target> [-exec cmd ...]\n");
     exit(1);
   }
 
-  find(argv[1], argv[2]);
+  char *path = argv[1];
+  char *target = argv[2];
+  char **cmd_args = 0;
+  int cmd_count = 0;
+
+  // Tách lấy lệnh đằng sau cờ -exec (nếu có)
+  for (int i = 3; i < argc; i++) {
+    if (strcmp(argv[i], "-exec") == 0) {
+      if (i + 1 < argc) {
+        cmd_args = &argv[i + 1];
+        cmd_count = argc - (i + 1);
+      } else {
+        fprintf(2, "find: -exec requires a command\n");
+        exit(1);
+      }
+      break;
+    }
+  }
+
+  find(path, target, cmd_args, cmd_count);
   exit(0);
 }
