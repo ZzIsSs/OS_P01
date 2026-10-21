@@ -167,6 +167,8 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  p->syscall_mask = 0;
+  p->allowed_path[0] = 0;
   p->state = UNUSED;
 }
 
@@ -274,6 +276,8 @@ kfork(void)
     return -1;
   }
   np->sz = p->sz;
+  np->syscall_mask = p->syscall_mask;
+  safestrcpy(np->allowed_path, p->allowed_path, sizeof(np->allowed_path));
 
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
