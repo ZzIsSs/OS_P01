@@ -146,7 +146,6 @@ walkaddr(pagetable_t pagetable, uint64 va)
   return pa;
 }
 
-
 #if defined(LAB_PGTBL) || defined(SOL_MMAP) || defined(SOL_COW)
 void
 vmprint(pagetable_t pagetable)
@@ -493,7 +492,6 @@ copyinstr(pagetable_t pagetable, uint64 psz, char *dst, uint64 srcva,
   }
 }
 
-
 // allocate and map user memory if process is referencing a page
 // that was lazily allocated in sys_sbrk().
 // returns 0 if va is invalid or already mapped, or if
@@ -502,7 +500,6 @@ uint64
 vmfault(pagetable_t pagetable, uint64 psz, uint64 va, int read)
 {
   uint64 mem;
-
 
   if (va >= psz)
     return 0;
@@ -534,8 +531,6 @@ ismapped(pagetable_t pagetable, uint64 va)
   return 0;
 }
 
-
-
 #ifdef LAB_PGTBL
 pte_t *
 pgpte(pagetable_t pagetable, uint64 va)
@@ -543,9 +538,9 @@ pgpte(pagetable_t pagetable, uint64 va)
   return walk(pagetable, va, 0);
 }
 
-
 void
-cnt_level(pagetable_t pagetable, uint64 *nsuper, uint64 *n2, uint64 va_start, int level)
+cnt_level(pagetable_t pagetable, uint64 *nsuper, uint64 *n2, uint64 va_start,
+          int level)
 {
   uint64 va;
   int n = (level == 3) ? 1 : 512;
@@ -557,7 +552,7 @@ cnt_level(pagetable_t pagetable, uint64 *nsuper, uint64 *n2, uint64 va_start, in
       uint64 child = PTE2PA(pte);
       if (level > 0) {
         if (!PTE_LEAF(pte)) {
-          cnt_level((pagetable_t)child, nsuper, n2, va, level-1);
+          cnt_level((pagetable_t)child, nsuper, n2, va, level - 1);
         } else {
           *nsuper += 1;
         }
@@ -569,7 +564,8 @@ cnt_level(pagetable_t pagetable, uint64 *nsuper, uint64 *n2, uint64 va_start, in
 }
 
 uint64
-sys_ksupernpte() {
+sys_ksupernpte()
+{
   struct proc *p;
   uint64 as, an;
   uint64 s = 0, n = 0;
