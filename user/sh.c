@@ -1,8 +1,10 @@
 // Shell.
 
 #include "kernel/types.h"
+#include "kernel/stat.h"
 #include "user/user.h"
 #include "kernel/fcntl.h"
+#include "kernel/fs.h"
 
 // Parsed command representation
 #define EXEC  1
@@ -12,6 +14,18 @@
 #define BACK  5
 
 #define MAXARGS 10
+
+// [MODIFIED - Task 3b & 3c]: Mã điều khiển phím tương tác từ console.c
+#define KEY_UP    0x10
+#define KEY_DOWN  0x11
+#define CTRL_U    (('U') - '@')
+
+// [MODIFIED - Task 3c]: Cấu hình lưu trữ lịch sử lệnh (lưu tối đa 16 lệnh)
+#define MAX_HIST    16
+#define MAX_CMD_LEN 100
+
+static char history[MAX_HIST][MAX_CMD_LEN];
+static int hist_count = 0;
 
 struct cmd {
   int type;
@@ -53,6 +67,101 @@ int fork1(void); // Fork but panics on failure.
 void panic(char *);
 struct cmd *parsecmd(char *);
 void runcmd(struct cmd *) __attribute__((noreturn));
+
+// [MODIFIED - Task 3b]: Kiểm tra chuỗi str có bắt đầu bằng tiền tố prefix không
+static int
+prefix_match(const char *prefix, const char *str)
+{
+  while (*prefix) {
+    if (*prefix != *str)
+      return 0;
+    prefix++;
+    str++;
+  }
+  return 1;
+}
+
+// [MODIFIED - Task 3c]: Thêm một lệnh không rỗng vào mảng lịch sử (circular buffer)
+static void
+add_history(const char *cmd)
+{
+  if (cmd[0] == '\0')
+    return;
+  strcpy(history[hist_count % MAX_HIST], cmd);
+  hist_count++;
+}
+
+// [MODIFIED - Task 3b]: Xử lý tính năng Tab completion
+static void
+handle_tab(char *buf, int *pos, int nbuf)
+{
+  buf[*pos] = '\0';
+
+  // Xác định vị trí khoảng trắng cuối cùng để tách từ đang gõ dở
+  int last_space = -1;
+  for (int i = 0; i < *pos; i++) {
+    if (buf[i] == ' ')
+      last_space = i;
+  }
+
+  // Từ đầu tiên tìm trong "/", các từ tiếp theo tìm trong "."
+  char *prefix = (last_space == -1) ? buf : &buf[last_space + 1];
+  char *dir_path = (last_space == -1) ? "/" : ".";
+
+  // [MODIFIED - Phương án B]: Chỉ chặn khi ở từ đầu tiên (đầu dòng lệnh) mà chưa gõ ký tự nào
+  // Nếu đã qua khoảng trắng (ví dụ "cat "), cho phép Tab để liệt kê toàn bộ file trong thư mục hiện tại "."
+  if (last_space == -1 && prefix[0] == '\0')
+    return;
+
+  int fd = open(dir_path, O_RDONLY);
+  if (fd < 0)
+    return;
+
+  struct dirent de;
+  char matches[64][DIRSIZ + 1];
+  int match_count = 0;
+
+  // Quét danh sách file trong thư mục
+  while (read(fd, &de, sizeof(de)) == sizeof(de)) {
+    if (de.inum == 0)
+      continue;
+
+    // Đảm bảo tên file luôn có byte null kết thúc (do DIRSIZ = 14 trong xv6)
+    char name[DIRSIZ + 1];
+    memmove(name, de.name, DIRSIZ);
+    name[DIRSIZ] = '\0';
+
+    // Bỏ qua hai thư mục đặc biệt "." và ".."
+    if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+      continue;
+
+    if (prefix_match(prefix, name) && match_count < 64) {
+      strcpy(matches[match_count++], name);
+    }
+  }
+  close(fd);
+
+  if (match_count == 1) {
+    // Khớp 1 file duy nhất: tự động bù phần đuôi còn thiếu lên màn hình và vào buf
+    int p_len = strlen(prefix);
+    char *tail = &matches[0][p_len];
+    while (*tail && *pos + 1 < nbuf) {
+      write(2, tail, 1);
+      buf[(*pos)++] = *tail++;
+    }
+    buf[*pos] = '\0';
+  } else if (match_count > 1) {
+    // Khớp nhiều file: xuống dòng in toàn bộ tên file, in lại prompt "$ " và nội dung buf hiện tại
+    write(2, "\n", 1);
+    for (int i = 0; i < match_count; i++) {
+      write(2, matches[i], strlen(matches[i]));
+      if (i + 1 < match_count)
+        write(2, " ", 1);
+    }
+    write(2, "\n$ ", 3);
+    write(2, buf, *pos);
+  }
+}
 
 // Execute cmd.  Never returns.
 void
@@ -134,10 +243,116 @@ runcmd(struct cmd *cmd)
 int
 getcmd(char *buf, int nbuf)
 {
-  write(2, "$ ", 2);
+  struct stat st;
+  int is_console = (fstat(0, &st) == 0 && st.type == T_DEVICE);
+
+  // [MODIFIED - Task 3a]: Chỉ in dấu nhắc lệnh "$ " khi stdin là thiết bị console tương tác
+  if (is_console) {
+    write(2, "$ ", 2);
+  }
+
   memset(buf, 0, nbuf);
-  gets(buf, nbuf);
-  if (buf[0] == 0) // EOF
+
+  // [MODIFIED - Task 3a]: Khi đọc lệnh từ file script (sh < script.sh) hoặc pipe,
+  // sử dụng gets() thuần túy để giữ nguyên hành vi tiêu chuẩn của xv6
+  if (!is_console) {
+    gets(buf, nbuf);
+    if (buf[0] == 0) // EOF
+      return -1;
+    return 0;
+  }
+
+  // [MODIFIED - Task 3b & 3c]: Chế độ tương tác console: hỗ trợ Tab completion và duyệt lịch sử bằng Mũi tên
+  int pos = 0;
+  int hist_cur = hist_count;
+  char draft[MAX_CMD_LEN];
+  memset(draft, 0, sizeof(draft));
+
+  while (pos + 1 < nbuf) {
+    char c;
+    int cc = read(0, &c, 1);
+    if (cc < 1)
+      break;
+
+    // Phím Tab: hoàn thiện tên lệnh / tên file
+    if (c == '\t') {
+      handle_tab(buf, &pos, nbuf);
+      continue;
+    }
+
+    // Phím Backspace khi đệm kernel đã rỗng: xóa lùi trên buf và màn hình
+    if (c == '\b') {
+      if (pos > 0) {
+        pos--;
+        buf[pos] = '\0';
+        write(2, "\b \b", 3);
+      }
+      continue;
+    }
+
+    // Phím Ctrl+U: xóa toàn bộ dòng lệnh đang hiển thị
+    if (c == CTRL_U) {
+      while (pos > 0) {
+        pos--;
+        buf[pos] = '\0';
+        write(2, "\b \b", 3);
+      }
+      continue;
+    }
+
+    // Phím Mũi tên Lên: duyệt về lệnh cũ hơn trong lịch sử
+    if (c == KEY_UP) {
+      int min_hist = (hist_count > MAX_HIST) ? (hist_count - MAX_HIST) : 0;
+      if (hist_cur > min_hist) {
+        if (hist_cur == hist_count) {
+          // Lưu lại nội dung đang gõ dở vào bản nháp draft
+          buf[pos] = '\0';
+          strcpy(draft, buf);
+        }
+        hist_cur--;
+        // Xóa dòng hiện tại trên màn hình
+        while (pos > 0) {
+          pos--;
+          write(2, "\b \b", 3);
+        }
+        // Nạp lệnh từ lịch sử và in ra màn hình
+        strcpy(buf, history[hist_cur % MAX_HIST]);
+        pos = strlen(buf);
+        write(2, buf, pos);
+      }
+      continue;
+    }
+
+    // Phím Mũi tên Xuống: duyệt về lệnh mới hơn trong lịch sử (hoặc khôi phục draft)
+    if (c == KEY_DOWN) {
+      if (hist_cur < hist_count) {
+        hist_cur++;
+        // Xóa dòng hiện tại trên màn hình
+        while (pos > 0) {
+          pos--;
+          write(2, "\b \b", 3);
+        }
+        if (hist_cur == hist_count) {
+          // Khôi phục bản nháp đang gõ dở ban đầu
+          strcpy(buf, draft);
+        } else {
+          strcpy(buf, history[hist_cur % MAX_HIST]);
+        }
+        pos = strlen(buf);
+        write(2, buf, pos);
+      }
+      continue;
+    }
+
+    // Ký tự thông thường (đã được kernel consoleintr echo ra màn hình)
+    buf[pos++] = c;
+    buf[pos] = '\0';
+    if (c == '\n' || c == '\r')
+      break;
+  }
+
+  buf[pos] = '\0';
+  if (buf[0] == 0) // EOF (Ctrl+D)
     return -1;
   return 0;
 }
@@ -158,14 +373,54 @@ main(void)
 
   // Read and run input commands.
   while (getcmd(buf, sizeof(buf)) >= 0) {
+    // [MODIFIED - Task 3c]: Cắt bỏ ký tự xuống dòng '\n' và '\r' ở cuối
+    int len = strlen(buf);
+    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r')) {
+      buf[--len] = '\0';
+    }
+
     char *cmd = buf;
     while (*cmd == ' ' || *cmd == '\t')
       cmd++;
-    if (*cmd == '\n') // is a blank command
+    if (*cmd == '\0') // Lệnh rỗng (chỉ bấm Enter) -> bỏ qua, không ghi vào history
       continue;
+
+    // [MODIFIED - Task 3c]: Xử lý mở rộng !! (lệnh gần nhất) và !n (lệnh số n)
+    if (cmd[0] == '!' && cmd[1] == '!' && cmd[2] == '\0') {
+      if (hist_count == 0) {
+        fprintf(2, "sh: no history available\n");
+        continue;
+      }
+      strcpy(buf, history[(hist_count - 1) % MAX_HIST]);
+      cmd = buf;
+      printf("%s\n", cmd); // In lệnh ra trước khi chạy theo đúng yêu cầu đề bài
+    } else if (cmd[0] == '!' && cmd[1] >= '0' && cmd[1] <= '9') {
+      int n = atoi(cmd + 1);
+      int min_idx = (hist_count > MAX_HIST) ? (hist_count - MAX_HIST + 1) : 1;
+      int max_idx = hist_count;
+      if (hist_count == 0 || n < min_idx || n > max_idx) {
+        fprintf(2, "sh: event not found: %d\n", n);
+        continue;
+      }
+      strcpy(buf, history[(n - 1) % MAX_HIST]);
+      cmd = buf;
+      printf("%s\n", cmd); // In lệnh ra trước khi chạy theo đúng yêu cầu đề bài
+    }
+
+    // [MODIFIED - Task 3c]: Lưu câu lệnh hợp lệ vào mảng history
+    add_history(cmd);
+
+    // [MODIFIED - Task 3c]: Built-in command: history (in danh sách lệnh đánh số từ 1)
+    if (strcmp(cmd, "history") == 0) {
+      int start = (hist_count > MAX_HIST) ? (hist_count - MAX_HIST) : 0;
+      for (int i = start; i < hist_count; i++) {
+        printf("%d %s\n", i + 1, history[i % MAX_HIST]);
+      }
+      continue;
+    }
+
     if (cmd[0] == 'c' && cmd[1] == 'd' && cmd[2] == ' ') {
       // Chdir must be called by the parent, not the child.
-      cmd[strlen(cmd) - 1] = 0; // chop \n
       if (chdir(cmd + 3) < 0)
         fprintf(2, "cannot cd %s\n", cmd + 3);
     } else {
