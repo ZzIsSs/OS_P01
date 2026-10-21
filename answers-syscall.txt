@@ -1,0 +1,17 @@
+1. `interpose()` lưu mask của các system call bị chặn vào `struct proc`. Trước khi gọi handler, `syscall()` kiểm tra bit tương ứng; nếu bị chặn thì trả về `-1`.
+
+2. Trong `kfork()`, child được copy mask và pathname từ parent nên restriction vẫn còn sau `fork()`. Mask được cập nhật bằng phép OR, vậy nên gọi `interpose(0, ...)` không gỡ được restriction cũ.
+
+3. Với `open` và `exec`, nếu system call bị mask thì kernel chỉ cho chạy khi pathname trùng với pathname được cho phép. Các system call bị mask khác luôn bị từ chối. Path `"-"` được xem là không cho phép pathname nào, còn tên file như `"---"` vẫn là tên hợp lệ.
+
+4. Phần `attack` dựa trên việc lab không xoá nội dung page trong `uvmalloc()` và `kfree()`. Sau khi `secret` thoát, `attack` xin lại các page đó, tìm chuỗi `"Here it is: "` rồi in secret nằm phía sau chuỗi này.
+
+5. Các test sandbox kiểm tra mask, kế thừa qua `fork()`, giới hạn pathname và khả năng escape. Các test sandbox và attack đều đã được pass. Patch hiện cũng đã được apply trên clone sạch và build bình thường.
+
+Bonus: Trong code gốc, `namex()` có thể tiếp tục đi qua một inode thư mục
+đã bị unlink nhưng vẫn còn được giữ bởi `cwd`. Sau chuỗi `mkdir /a`,
+`mkdir /a/b`, `chdir /a/b`, `unlink /a/b`, `unlink /a`, việc mở `../`
+có thể làm kernel panic với `ilock: no type`. PoC trong `user/exploit.c`
+chạy bằng system call và tái hiện panic trên bản trước bản sửa.
+Bản sửa kiểm tra `ip->nlink == 0` trong `namex()` và từ chối đi tiếp qua
+orphaned inode; trên bản hiện tại PoC kết thúc bình thường.
