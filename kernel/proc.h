@@ -101,6 +101,6 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
-  uint64 syscall_mask;              // System calls blocked for this process
-  char allowed_path[MAXPATH];       // Path allowed for masked open/exec
+  uint64 syscall_mask;         // System calls blocked for this process
+  char allowed_path[MAXPATH];  // Path allowed for masked open/exec
 };

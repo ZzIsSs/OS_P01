@@ -155,7 +155,6 @@ vmprint(pagetable_t pagetable)
 }
 #endif
 
-
 // add a mapping to the kernel page table.
 // only used when booting.
 // does not flush TLB or enable paging.
@@ -243,7 +242,6 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
     *pte = 0;
   }
 }
-
 
 // Allocate PTEs and physical memory to grow process from oldsz to
 // newsz, which need not be page aligned.  Returns new size or 0 on error.
@@ -403,7 +401,6 @@ copyout(pagetable_t pagetable, uint64 psz, uint64 dstva, char *src, uint64 len)
       // printk("copyout: pte should exist %lx %ld\n", dstva, len);
       return -1;
     }
-
 
     // forbid copyout over read-only user text pages.
     if ((*pte & PTE_W) == 0)
