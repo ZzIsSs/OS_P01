@@ -25,6 +25,13 @@
 #define BACKSPACE 0x100       // erase the last output character
 #define C(x)      ((x) - '@') // Control-x
 
+// [MODIFIED - Task 3b & 3c]: Tín hiệu phím đặc biệt gửi lên user-space shell
+#define KEY_UP    0x10
+#define KEY_DOWN  0x11
+
+// [MODIFIED - Task 3c]: Trạng thái bộ máy FSM bắt chuỗi ANSI escape cho phím mũi tên (\033[A, \033[B)
+static int esc_state = 0; // 0: Normal, 1: ESC (0x1b), 2: '['
+
 //
 // send one character to the uart, but don't use
 // interrupts or sleep(). safe to be called from
@@ -126,9 +133,11 @@ consoleread(int user_dst, uint64 dst, int n)
     dst++;
     --n;
 
-    if (c == '\n') {
-      // a whole line has arrived, return to
-      // the user-level read().
+    // [MODIFIED - Task 3b & 3c]: Đánh thức consoleread() sớm khi gặp các phím điều khiển tương tác
+    // (\n, \t, phím mũi tên, xóa lùi \b khi đệm rỗng, Ctrl+U)
+    if (c == '\n' || c == '\t' || c == KEY_UP || c == KEY_DOWN ||
+        c == '\b' || c == C('U')) {
+      // Return immediately on newline or interactive control keys
       break;
     }
   }
@@ -148,6 +157,46 @@ consoleintr(int c)
 {
   acquire(&cons.lock);
 
+  // [MODIFIED - Task 3c]: State machine bắt chuỗi ANSI escape phím Mũi tên (\033[A, \033[B)
+  // Đảm bảo không echo ra màn hình và giải phóng cons.lock đúng cách để chống deadlock.
+  if (esc_state == 1) {
+    if (c == '[') {
+      esc_state = 2;
+      release(&cons.lock);
+      return;
+    }
+    esc_state = 0; // Không phải '[', reset về trạng thái bình thường và rơi xuống xử lý c
+  } else if (esc_state == 2) {
+    esc_state = 0;
+    if (c == 'A') { // Up arrow -> gửi tín hiệu KEY_UP
+      if (cons.e - cons.r < INPUT_BUF_SIZE) {
+        cons.buf[cons.e++ % INPUT_BUF_SIZE] = KEY_UP;
+        cons.w = cons.e;
+        wakeup(&cons.r);
+      }
+      release(&cons.lock);
+      return;
+    } else if (c == 'B') { // Down arrow -> gửi tín hiệu KEY_DOWN
+      if (cons.e - cons.r < INPUT_BUF_SIZE) {
+        cons.buf[cons.e++ % INPUT_BUF_SIZE] = KEY_DOWN;
+        cons.w = cons.e;
+        wakeup(&cons.r);
+      }
+      release(&cons.lock);
+      return;
+    } else {
+      // Bỏ qua các chuỗi CSI khác (Mũi tên Trái 'D', Phải 'C', ...) để không in rác ra màn hình
+      release(&cons.lock);
+      return;
+    }
+  }
+
+  if (c == '\x1b') { // Bắt đầu chuỗi ESC (27)
+    esc_state = 1;
+    release(&cons.lock);
+    return;
+  }
+
   switch (c) {
   case C('P'): // Print process list.
     procdump();
@@ -158,12 +207,33 @@ consoleintr(int c)
       cons.e--;
       consputc(BACKSPACE);
     }
+    // [MODIFIED - Task 3c]: Đẩy C('U') lên cho shell xóa phần text do Tab/History chèn vào trước đó
+    if (cons.e - cons.r < INPUT_BUF_SIZE) {
+      cons.buf[cons.e++ % INPUT_BUF_SIZE] = C('U');
+      cons.w = cons.e;
+      wakeup(&cons.r);
+    }
     break;
   case C('H'): // Backspace
   case '\x7f': // Delete key
     if (cons.e != cons.w) {
       cons.e--;
       consputc(BACKSPACE);
+    } else if (cons.e - cons.r < INPUT_BUF_SIZE) {
+      // [MODIFIED - Task 3b & 3c]: Khi bộ đệm kernel rỗng (cons.e == cons.w),
+      // gửi '\b' lên shell để shell xóa lùi trên buf đã hoàn thành trước đó.
+      // Tuyệt đối không gọi consputc ở đây vì shell sẽ tự xử lý hiển thị.
+      cons.buf[cons.e++ % INPUT_BUF_SIZE] = '\b';
+      cons.w = cons.e;
+      wakeup(&cons.r);
+    }
+    break;
+  case '\t': // [MODIFIED - Task 3b]: Kích hoạt Tab completion
+    // Không echo ký tự '\t', đẩy trực tiếp vào cons.buf và đánh thức consoleread()
+    if (cons.e - cons.r < INPUT_BUF_SIZE) {
+      cons.buf[cons.e++ % INPUT_BUF_SIZE] = '\t';
+      cons.w = cons.e;
+      wakeup(&cons.r);
     }
     break;
   default:
