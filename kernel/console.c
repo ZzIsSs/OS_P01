@@ -26,8 +26,8 @@
 #define C(x)      ((x) - '@') // Control-x
 
 // [MODIFIED - Task 3b & 3c]: Tín hiệu phím đặc biệt gửi lên user-space shell
-#define KEY_UP    0x10
-#define KEY_DOWN  0x11
+#define KEY_UP   0x10
+#define KEY_DOWN 0x11
 
 // [MODIFIED - Task 3c]: Trạng thái bộ máy FSM bắt chuỗi ANSI escape cho phím mũi tên (\033[A, \033[B)
 static int esc_state = 0; // 0: Normal, 1: ESC (0x1b), 2: '['
@@ -135,8 +135,8 @@ consoleread(int user_dst, uint64 dst, int n)
 
     // [MODIFIED - Task 3b & 3c]: Đánh thức consoleread() sớm khi gặp các phím điều khiển tương tác
     // (\n, \t, phím mũi tên, xóa lùi \b khi đệm rỗng, Ctrl+U)
-    if (c == '\n' || c == '\t' || c == KEY_UP || c == KEY_DOWN ||
-        c == '\b' || c == C('U')) {
+    if (c == '\n' || c == '\t' || c == KEY_UP || c == KEY_DOWN || c == '\b' ||
+        c == C('U')) {
       // Return immediately on newline or interactive control keys
       break;
     }
@@ -165,7 +165,8 @@ consoleintr(int c)
       release(&cons.lock);
       return;
     }
-    esc_state = 0; // Không phải '[', reset về trạng thái bình thường và rơi xuống xử lý c
+    esc_state =
+      0; // Không phải '[', reset về trạng thái bình thường và rơi xuống xử lý c
   } else if (esc_state == 2) {
     esc_state = 0;
     if (c == 'A') { // Up arrow -> gửi tín hiệu KEY_UP

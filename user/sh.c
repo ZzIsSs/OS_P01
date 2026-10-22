@@ -16,9 +16,9 @@
 #define MAXARGS 10
 
 // [MODIFIED - Task 3b & 3c]: Mã điều khiển phím tương tác từ console.c
-#define KEY_UP    0x10
-#define KEY_DOWN  0x11
-#define CTRL_U    (('U') - '@')
+#define KEY_UP   0x10
+#define KEY_DOWN 0x11
+#define CTRL_U   (('U') - '@')
 
 // [MODIFIED - Task 3c]: Cấu hình lưu trữ lịch sử lệnh (lưu tối đa 16 lệnh)
 #define MAX_HIST    16
@@ -382,7 +382,8 @@ main(void)
     char *cmd = buf;
     while (*cmd == ' ' || *cmd == '\t')
       cmd++;
-    if (*cmd == '\0') // Lệnh rỗng (chỉ bấm Enter) -> bỏ qua, không ghi vào history
+    if (*cmd ==
+        '\0') // Lệnh rỗng (chỉ bấm Enter) -> bỏ qua, không ghi vào history
       continue;
 
     // [MODIFIED - Task 3c]: Xử lý mở rộng !! (lệnh gần nhất) và !n (lệnh số n)
